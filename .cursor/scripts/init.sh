@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# Wizard iniziale per progetto (Cursor) con prompt chiari e default espliciti
-# - Mostra sempre il valore di default e cosa succede se premi INVIO
-# - Conferma ogni scelta con riepilogo
-# - Crea MCP per-progetto (filesystem), PRD, tasks e file base
-# - Tenta il reload automatico di Cursor/VS Code
+# Wizard iniziale per progetto (Cursor) - versione chiara e guidata
+#
+# Cosa fa:
+# - Verifica prerequisiti (node, npm, npx, git) e versioni minime
+# - (Opzionale) Verifica accesso GitHub al remote origin se presente
+# - Configura MCP per-progetto (filesystem) con percorso scelto
+# - Crea PRD, tasks e file base (.editorconfig, .gitignore, README) su richiesta
+# - Prova il reload automatico della finestra di Cursor/VS Code
+#
+# Modalità:
+# - Interattiva (default) con prompt espliciti e default chiari
+# - Non-interattiva con flag --yes (accetta tutti i default consigliati)
+#
+# Esempi:
+#   bash .cursor/scripts/init.sh
+#   bash .cursor/scripts/init.sh --yes
+#   bash .cursor/scripts/init.sh --mcp filesystem --root . --no-prd
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
@@ -22,35 +34,60 @@ err()  { echo -e "${RED}❌${RESET} $*"; }
 info() { echo -e "${BLUE}ℹ️ ${RESET} $*"; }
 step() { echo -e "\n${BOLD}==> $*${RESET}"; }
 
-# ===== helpers ===============================================================
+# ===== helper ================================================================
 vernum() { local v="${1#v}"; IFS='.' read -r a b c <<<"$v"; echo "$a ${b:-0} ${c:-0}"; }
 ver_ge() { local A B C D E F; read -r A B C <<<"$(vernum "$1")"; read -r D E F <<<"$(vernum "$2")"; (( A>D || (A==D && (B>E || (B==E && C>=F))) )); }
 
-ask_yes_no_default_no() {
-  # Prompt sì/no con default = NO. Invio => NO.
-  local q="$1"; local ans
-  read -r -p "$q [s/N]: " ans
-  [[ "${ans,,}" =~ ^(s|si|y|yes)$ ]] && return 0 || return 1
+ask_yes_no_default_yes() { # Invio => Sì
+  local q="$1" a; read -r -p "$q [S/n]: " a
+  [[ -z "$a" || "${a,,}" =~ ^(s|si|y|yes)$ ]]
 }
 
-ask_yes_no_default_yes() {
-  # Prompt sì/no con default = SÌ. Invio => SÌ.
-  local q="$1"; local ans
-  read -r -p "$q [S/n]: " ans
-  [[ -z "$ans" || "${ans,,}" =~ ^(s|si|y|yes)$ ]] && return 0 || return 1
+ask_yes_no_default_no() { # Invio => No
+  local q="$1" a; read -r -p "$q [s/N]: " a
+  [[ "${a,,}" =~ ^(s|si|y|yes)$ ]]
 }
 
-ask_with_default() {
-  # Prompt con default esplicito. Invio => default.
-  local prompt="$1"; local def="$2"; local out
+ask_with_default() {      # Invio => default
+  local prompt="$1" def="$2" out
   read -r -p "$prompt (default: ${def}) → " out
   echo "${out:-$def}"
 }
 
-confirm_choice() {
-  # Stampa conferma scelta in modo chiaro
-  echo -e "${DIM}Scelta:${RESET} $*"
-}
+# ===== argomenti =============================================================
+AUTO_YES=false
+MCP_CHOICE=""      # "", "filesystem", "none"
+FS_ROOT=""         # percorso per filesystem
+CREATE_PRD=true
+CREATE_TASKS=true
+CREATE_BASE=true
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -y|--yes) AUTO_YES=true; shift ;;
+    --mcp) MCP_CHOICE="${2:-}"; shift 2 ;;
+    --root) FS_ROOT="${2:-}"; shift 2 ;;
+    --no-prd) CREATE_PRD=false; shift ;;
+    --no-tasks) CREATE_TASKS=false; shift ;;
+    --no-base) CREATE_BASE=false; shift ;;
+    -h|--help)
+      cat <<'HLP'
+Uso:
+  bash .cursor/scripts/init.sh [opzioni]
+
+Opzioni:
+  -y, --yes           Accetta tutti i default consigliati (non-interattivo)
+  --mcp <val>         Forza MCP: "filesystem" oppure "none"
+  --root <path>       Root esposta per MCP filesystem (default: .)
+  --no-prd            Non creare docs/PRD.md
+  --no-tasks          Non creare .cursor/tasks.json
+  --no-base           Non creare .editorconfig, .gitignore, README
+  -h, --help          Mostra aiuto
+HLP
+      exit 0 ;;
+    *) warn "Opzione sconosciuta: $1"; shift ;;
+  esac
+done
 
 # ===== prerequisiti ==========================================================
 step "check prerequisiti"
@@ -63,55 +100,80 @@ NODE_VER="$(node -v)"
 ver_ge "$NODE_VER" "18.0.0" || { err "Node $NODE_VER troppo vecchio. Richiesto >= 18.0.0"; exit 1; }
 ok "Node $NODE_VER"
 
-# ===== (opzionale) verifica accesso GitHub remoto ===========================
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git remote get-url origin >/dev/null 2>&1; then
-  if git ls-remote --heads "$(git remote get-url origin)" >/dev/null 2>&1; then
-    ok "Accesso a GitHub OK per $(git remote get-url origin)"
+# ===== (opzionale) verifica accesso GitHub remote ============================
+step "verifica autenticazione GitHub (opzionale)"
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if origin_url="$(git remote get-url origin 2>/dev/null)"; then
+    if GIT_TERMINAL_PROMPT=0 git ls-remote -h "$origin_url" HEAD >/dev/null 2>&1; then
+      ok "Accesso a GitHub OK per ${origin_url}"
+    else
+      warn "Accesso a GitHub non verificato (repo privato o token mancante/scaduto). Continuiamo comunque."
+      info "Suggerimento: usa un PAT Classic con scope 'repo' o 'gh auth login'."
+    fi
   else
-    warn "Impossibile verificare l’accesso a GitHub (repo privato o token mancante?). Continua comunque."
+    info "Nessun 'origin' configurato. Salta verifica."
   fi
+else
+  info "Questa cartella non è (ancora) un repository git. Salta verifica."
 fi
 
-# trova CLI editor per reload
+# ===== rileva CLI editor per reload =========================================
 CLI=""
 command -v cursor >/dev/null 2>&1 && CLI="cursor"
-command -v code   >/dev/null 2>&1 && CLI="${CLI:-code}"
+[[ -z "$CLI" && "$(uname -s)" == "Darwin" ]] && command -v code >/dev/null 2>&1 && CLI="code"
 [[ -n "$CLI" ]] && ok "CLI editor rilevata: ${CLI}" || warn "CLI editor non rilevata. Il reload sarà manuale."
 
 # ===== wizard ================================================================
 step "wizard iniziale progetto"
 
-# 1) MCP per-progetto
-echo "Seleziona MCP per questo progetto:"
-echo "  1) filesystem (consigliato)   0) nessuno"
-CHOICE="$(ask_with_default 'Scelta' '1')"
-confirm_choice "MCP selezionato: ${CHOICE}"
+# 1) Scelta MCP per-progetto
+if [[ -z "$MCP_CHOICE" ]]; then
+  if "$AUTO_YES"; then
+    MCP_CHOICE="filesystem"
+    info "Modalità --yes: MCP impostato a 'filesystem' (consigliato)."
+  else
+    echo "Seleziona MCP per questo progetto:"
+    echo "  1) filesystem (consigliato)   0) nessuno"
+    read -r -p "Scelta (Invio = 1): " CHOICE
+    CHOICE="${CHOICE:-1}"
+    MCP_CHOICE=$([[ "$CHOICE" == "1" ]] && echo "filesystem" || echo "none")
+  fi
+fi
+echo -e "${DIM}Scelta MCP:${RESET} ${MCP_CHOICE}"
 
-if [[ "$CHOICE" == "1" ]]; then
-  ROOT="$(ask_with_default 'Percorso root da esporre al tool filesystem (Invio = cartella corrente)' '.')"
-  confirm_choice "Filesystem root → ${ROOT}"
+# Config MCP filesystem
+if [[ "$MCP_CHOICE" == "filesystem" ]]; then
+  if [[ -z "$FS_ROOT" ]]; then
+    if "$AUTO_YES"; then
+      FS_ROOT="."
+      info "Modalità --yes: root filesystem impostata a '.' (cartella corrente)."
+    else
+      FS_ROOT="$(ask_with_default 'Percorso root da esporre al tool filesystem (premi INVIO per usare la cartella corrente)' '.')"
+    fi
+  fi
   mkdir -p .cursor
   cat > .cursor/mcp.json <<JSON
 {
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["@modelcontextprotocol/server-filesystem", "${ROOT}"],
+      "args": ["@modelcontextprotocol/server-filesystem", "${FS_ROOT}"],
       "disabled": false
     }
   }
 }
 JSON
-  ok "Creato .cursor/mcp.json (filesystem → ${ROOT})"
+  ok "Creato .cursor/mcp.json (filesystem → ${FS_ROOT})"
 else
-  warn "Nessun MCP per-progetto creato (userai solo gli MCP globali)."
+  warn "Nessun MCP per-progetto creato (userai solo gli MCP globali configurati in Cursor)."
 fi
 
 # 2) PRD
-if ask_yes_no_default_yes "Vuoi creare il PRD (docs/PRD.md)? Se premi INVIO verrà creato ora"; then
-  mkdir -p docs
-  if [[ ! -f docs/PRD.md ]]; then
-    cat > docs/PRD.md <<'MD'
+if "$CREATE_PRD"; then
+  if "$AUTO_YES" || ask_yes_no_default_yes "Vuoi creare il PRD (docs/PRD.md)? Se premi INVIO verrà creato ora"; then
+    mkdir -p docs
+    if [[ ! -f docs/PRD.md ]]; then
+      cat > docs/PRD.md <<'MD'
 # product requirements document (prd)
 
 ## 1. contesto e obiettivo
@@ -140,19 +202,23 @@ GA4: `cta_click`, `form_submit`, `scroll_75`.
 ## 7. UAT
 Lighthouse mobile ≥ 90; nessun errore console/404.
 MD
-    ok "Creato docs/PRD.md"
+      ok "Creato docs/PRD.md"
+    else
+      info "PRD esistente: skip"
+    fi
   else
-    info "PRD esistente: skip"
+    info "PRD: non creato"
   fi
 else
-  confirm_choice "PRD: non creato (scelta utente)"
+  info "PRD: disattivato via flag"
 fi
 
 # 3) tasks
-if ask_yes_no_default_yes "Vuoi creare i task (.cursor/tasks.json)? Se premi INVIO verranno creati ora"; then
-  mkdir -p .cursor
-  if [[ ! -f .cursor/tasks.json ]]; then
-    cat > .cursor/tasks.json <<'JSON'
+if "$CREATE_TASKS"; then
+  if "$AUTO_YES" || ask_yes_no_default_yes "Vuoi creare i task (.cursor/tasks.json)? Se premi INVIO verranno creati ora"; then
+    mkdir -p .cursor
+    if [[ ! -f .cursor/tasks.json ]]; then
+      cat > .cursor/tasks.json <<'JSON'
 {
   "version": 1,
   "project": "Progetto",
@@ -177,18 +243,22 @@ if ask_yes_no_default_yes "Vuoi creare i task (.cursor/tasks.json)? Se premi INV
   ]
 }
 JSON
-    ok "Creato .cursor/tasks.json"
+      ok "Creato .cursor/tasks.json"
+    else
+      info "Tasks esistenti: skip"
+    fi
   else
-    info "Tasks esistenti: skip"
+    info "Tasks: non creati"
   fi
 else
-  confirm_choice "Tasks: non creati (scelta utente)"
+  info "Tasks: disattivati via flag"
 fi
 
 # 4) file base
-if ask_yes_no_default_yes "Vuoi creare i file base (.editorconfig, .gitignore, README)? Se premi INVIO verranno creati ora"; then
-  if [[ ! -f .editorconfig ]]; then
-    cat > .editorconfig <<'EC'
+if "$CREATE_BASE"; then
+  if "$AUTO_YES" || ask_yes_no_default_yes "Vuoi creare i file base (.editorconfig, .gitignore, README)? Se premi INVIO verranno creati ora"; then
+    if [[ ! -f .editorconfig ]]; then
+      cat > .editorconfig <<'EC'
 root = true
 [*]
 charset = utf-8
@@ -198,42 +268,46 @@ indent_size = 2
 insert_final_newline = true
 trim_trailing_whitespace = true
 EC
-    ok "Creato .editorconfig"
-  else
-    info ".editorconfig esistente: skip"
-  fi
+      ok "Creato .editorconfig"
+    else
+      info ".editorconfig esistente: skip"
+    fi
 
-  if [[ ! -f .gitignore ]]; then
-    cat > .gitignore <<'GI'
+    if [[ ! -f .gitignore ]]; then
+      cat > .gitignore <<'GI'
 node_modules/
 dist/
 .env
 .DS_Store
 GI
-    ok "Creato .gitignore"
-  else
-    info ".gitignore esistente: skip"
-  fi
+      ok "Creato .gitignore"
+    else
+      info ".gitignore esistente: skip"
+    fi
 
-  if [[ ! -f README.md ]]; then
-    cat > README.md <<'MD'
+    if [[ ! -f README.md ]]; then
+      cat > README.md <<'MD'
 # progetto (inizializzato dal wizard)
 - MCP globali (in Cursor): sequential-thinking, refactor-mcp
 - MCP per-progetto: filesystem in `.cursor/mcp.json` (se attivato)
 - Documentazione: `docs/PRD.md`
 - Pianificazione: `.cursor/tasks.json`
 MD
-    ok "Creato README.md"
+      ok "Creato README.md"
+    else
+      info "README esistente: skip"
+    fi
   else
-    info "README esistente: skip"
+    info "File base: non creati"
   fi
 else
-  confirm_choice "File base: non creati (scelta utente)"
+  info "File base: disattivati via flag"
 fi
 
 # ===== riepilogo =============================================================
 step "riepilogo"
 echo -e "${DIM}- MCP per-progetto:${RESET} $([[ -f .cursor/mcp.json ]] && echo 'filesystem' || echo 'nessuno')"
+echo -e "${DIM}- Root esposta:${RESET} $([[ -f .cursor/mcp.json ]] && jq -r '.mcpServers.filesystem.args[1]' .cursor/mcp.json 2>/dev/null || echo '-')"
 echo -e "${DIM}- PRD:${RESET} $([[ -f docs/PRD.md ]] && echo 'creato' || echo 'non creato')"
 echo -e "${DIM}- Tasks:${RESET} $([[ -f .cursor/tasks.json ]] && echo 'creati' || echo 'non creati')"
 echo -e "${DIM}- File base:${RESET} $([[ -f .editorconfig || -f .gitignore || -f README.md ]] && echo 'creati/aggiornati' || echo 'non creati')"
