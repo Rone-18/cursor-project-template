@@ -1,0 +1,7 @@
+{
+  "name": "cursor-project-template",
+  "private": true,
+  "scripts": {
+    "init": "bash .cursor/scripts/init.sh"
+  }
+}
