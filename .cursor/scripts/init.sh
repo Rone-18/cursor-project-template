@@ -2,6 +2,7 @@
 # ------------------------------------------------------------
 # Wizard iniziale per progetto (Cursor)
 # - Check prerequisiti (node/npm/npx/git, versioni minime)
+# - Verifica rapida autenticazione GitHub (token/gh login) se presente un remote
 # - Configura MCP per-progetto (filesystem con path scelto)
 # - Crea PRD, tasks e file base (opzionali)
 # - Tenta il reload automatico della finestra di Cursor/VS Code
@@ -23,13 +24,15 @@ info()  { echo -e "${BLUE}ℹ️ ${RESET} $*"; }
 step()  { echo -e "\n${BOLD}==> $*${RESET}"; }
 
 # ===== utility ==============================================================
-vernum() {  # converte "v18.17.0" -> "18.17.0" e in numero confrontabile "18 17 0"
+vernum() {  # "v18.17.0" -> "18 17 0"
   local v="${1#v}"; IFS='.' read -r a b c <<<"$v"; echo "$a ${b:-0} ${c:-0}"
 }
 ver_ge() {  # >=
   local A B C D E F; read -r A B C <<<"$(vernum "$1")"; read -r D E F <<<"$(vernum "$2")"
   (( A>D || (A==D && (B>E || (B==E && C>=F))) ))
 }
+
+ask_yn () { read -r -p "$1 [s/N]: " a; [[ "$a" =~ ^([sSyY]|yes)$ ]]; }
 
 # ===== prerequisiti =========================================================
 step "check prerequisiti"
@@ -51,6 +54,29 @@ if ! ver_ge "$NODE_VER" "18.0.0"; then
 fi
 ok "Node $NODE_VER"
 
+# ===== verifica auth GitHub (opzionale, non blocca) ========================
+step "verifica autenticazione GitHub (opzionale)"
+origin="$(git config --get remote.origin.url || true)"
+if [[ -n "${origin}" && "${origin}" == https*github.com* ]]; then
+  # Evita prompt interattivi: se non sei autenticato segnaliamo solo un warning
+  if GIT_TERMINAL_PROMPT=0 git ls-remote -h origin HEAD >/dev/null 2>&1; then
+    ok "Accesso a GitHub OK per ${origin}"
+  else
+    warn "GitHub non autenticato per ${origin} (repo privato o token mancante/scaduto)."
+    if command -v gh >/dev/null 2>&1; then
+      info "Suggerito: esegui ${BOLD}gh auth login${RESET} per configurare l'accesso."
+    else
+      info "In alternativa usa un Personal Access Token (Classic) con scope ${BOLD}repo${RESET}."
+      info "Guida: https://github.com/settings/tokens  (poi usa il token come password nei comandi git)."
+    fi
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+      warn "Rilevata variabile GITHUB_TOKEN, ma l'accesso fallisce: probabilmente il token è scaduto o non ha scope 'repo'."
+    fi
+  fi
+else
+  info "Nessun remote GitHub HTTPS rilevato oppure progetto non ancora collegato."
+fi
+
 # Trova CLI per reload (Cursor o VS Code)
 CLI=""
 if command -v cursor >/dev/null 2>&1; then
@@ -62,13 +88,11 @@ if [[ -n "${CLI}" ]]; then
   ok "CLI editor rilevata: ${CLI}"
 else
   warn "CLI editor non rilevata (né 'cursor' né 'code'). Il reload sarà manuale."
-  info "Suggerimento: in Cursor → Command Palette digita 'Shell Command: Install 'cursor' command in PATH'."
+  info "Suggerimento: in Cursor → Command Palette digita 'Shell Command: Install \"cursor\" command in PATH'."
 fi
 
 # ===== wizard ===============================================================
 step "wizard iniziale progetto"
-
-ask_yn () { read -r -p "$1 [s/N]: " a; [[ "$a" =~ ^([sSyY]|yes)$ ]]; }
 
 echo "Seleziona MCP per questo progetto:"
 echo "  1) filesystem (consigliato)   0) nessuno"
