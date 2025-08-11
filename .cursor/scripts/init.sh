@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------
-# Scopo: wizard iniziale per progetto usato in Cursor.
-# Cosa fa (domande sì/no):
-# 1) Configura MCP "filesystem" per *questo progetto* con root scelta.
-# 2) Crea PRD (docs/PRD.md).
-# 3) Crea task (.cursor/tasks.json) con accettazione chiara.
-# 4) Genera file base (.editorconfig, .gitignore, README).
-# Note: idempotente, non sovrascrive file già presenti.
+# Wizard iniziale per progetto (da eseguire in Cursor)
+# - Chiede quali componenti attivare
+# - Configura MCP per-progetto (filesystem con path scelto)
+# - Crea PRD, tasks e file base se richiesto
 # ------------------------------------------------------------
-
-set -e
+set -euo pipefail
 
 echo "==> Wizard iniziale progetto"
 
 ask_yn () { read -r -p "$1 [s/N]: " a; [[ "$a" =~ ^([sSyY]|yes)$ ]]; }
 
-# 1) MCP filesystem per-progetto
-if ask_yn "Vuoi configurare MCP 'filesystem' per questo progetto?"; then
+# === 1) MCP per-progetto ======================================================
+echo ""
+echo "Seleziona MCP per questo progetto:"
+echo "  1) filesystem (consigliato)  0) nessuno"
+read -r -p "Scelta [1/0] (default 1): " CHOICE
+CHOICE=${CHOICE:-1}
+
+if [[ "$CHOICE" == "1" ]]; then
   read -r -p "Percorso root da esporre (default: .): " ROOT
   ROOT=${ROOT:-.}
   mkdir -p .cursor
@@ -31,13 +33,15 @@ if ask_yn "Vuoi configurare MCP 'filesystem' per questo progetto?"; then
   }
 }
 JSON
-  echo "✅ Creato .cursor/mcp.json (filesystem → ${ROOT})"
+  echo "✅ MCP configurato: filesystem → ${ROOT}"
+else
+  echo "ℹ️  Nessun MCP per-progetto creato (userai solo i globali)."
 fi
 
-# 2) PRD
+# === 2) PRD ===================================================================
 if ask_yn "Vuoi creare il PRD (docs/PRD.md)?"; then
   mkdir -p docs
-  if [ ! -f docs/PRD.md ]; then
+  if [[ ! -f docs/PRD.md ]]; then
     cat > docs/PRD.md <<'MD'
 # product requirements document (prd)
 
@@ -59,7 +63,7 @@ PO: TODO | UX: TODO | Dev: TODO | SEO: TODO | QA: TODO
 
 ## 5. requisiti
 **Funzionali**: nav ≤ 5 voci, form contatto, FAQ.  
-**Non-funzionali**: performance, accessibilità (WCAG AA), SEO base.
+**Non-funzionali**: performance, accessibilità (WCAG AA), SEO.
 
 ## 6. metriche
 GA4: `cta_click`, `form_submit`, `scroll_75`.
@@ -73,10 +77,10 @@ MD
   fi
 fi
 
-# 3) tasks
+# === 3) Tasks =================================================================
 if ask_yn "Vuoi creare i task (.cursor/tasks.json)?"; then
   mkdir -p .cursor
-  if [ ! -f .cursor/tasks.json ]; then
+  if [[ ! -f .cursor/tasks.json ]]; then
     cat > .cursor/tasks.json <<'JSON'
 {
   "version": 1,
@@ -108,11 +112,10 @@ JSON
   fi
 fi
 
-# 4) file base
+# === 4) File base =============================================================
 if ask_yn "Vuoi creare file base (.editorconfig, .gitignore, README)?"; then
-  if [ ! -f .editorconfig ]; then
+  if [[ ! -f .editorconfig ]]; then
     cat > .editorconfig <<'EC'
-# Scopo: stile coerente tra editor
 root = true
 [*]
 charset = utf-8
@@ -127,7 +130,7 @@ EC
     echo "ℹ️  .editorconfig esistente: skip"
   fi
 
-  if [ ! -f .gitignore ]; then
+  if [[ ! -f .gitignore ]]; then
     cat > .gitignore <<'GI'
 node_modules/
 dist/
@@ -139,19 +142,19 @@ GI
     echo "ℹ️  .gitignore esistente: skip"
   fi
 
-  if [ ! -f README.md ]; then
+  if [[ ! -f README.md ]]; then
     cat > README.md <<'MD'
 # progetto (inizializzato dal wizard)
 
-- MCP globali (già in Cursor): sequential-thinking, refactor-mcp
-- MCP per-progetto: filesystem in `.cursor/mcp.json` (se abilitato)
+- MCP globali (in Cursor): sequential-thinking, refactor-mcp
+- MCP per-progetto: filesystem in `.cursor/mcp.json` (se attivato)
 - Documentazione: `docs/PRD.md`
 - Pianificazione: `.cursor/tasks.json`
 
 ## avvio rapido
-1) Apri il progetto in Cursor.  
-2) Terminale → `chmod +x scripts/init.sh && bash scripts/init.sh`  
-3) Reload Window in Cursor → `/mcp`
+1) Terminale di Cursor → `npm run init` (puoi rilanciarlo quando vuoi)  
+2) Dopo il wizard → `Cmd+Shift+P` → **Reload Window**  
+3) In chat → `/mcp` per vedere i tool attivi
 MD
     echo "✅ README creato"
   else
@@ -159,4 +162,5 @@ MD
   fi
 fi
 
-echo "🎉 Fine wizard. Esegui Reload Window in Cursor e usa /mcp."
+echo ""
+echo "🎉 Fine wizard. In Cursor esegui: Cmd+Shift+P → Reload Window → /mcp"
