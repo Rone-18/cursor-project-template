@@ -1,20 +1,77 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------
-# Wizard iniziale per progetto (da eseguire in Cursor)
-# - Chiede quali componenti attivare
+# Wizard iniziale per progetto (Cursor)
+# - Check prerequisiti (node/npm/npx/git, versioni minime)
 # - Configura MCP per-progetto (filesystem con path scelto)
-# - Crea PRD, tasks e file base se richiesto
+# - Crea PRD, tasks e file base (opzionali)
+# - Tenta il reload automatico della finestra di Cursor/VS Code
 # ------------------------------------------------------------
 set -euo pipefail
 
-echo "==> Wizard iniziale progetto"
+# ===== stile output (colori) ===============================================
+if [[ -t 1 ]]; then
+  BOLD="\e[1m"; DIM="\e[2m"; RESET="\e[0m"
+  GREEN="\e[32m"; YELLOW="\e[33m"; RED="\e[31m"; BLUE="\e[34m"
+else
+  BOLD=""; DIM=""; RESET=""; GREEN=""; YELLOW=""; RED=""; BLUE=""
+fi
+
+ok()    { echo -e "${GREEN}✅${RESET} $*"; }
+warn()  { echo -e "${YELLOW}⚠️ ${RESET} $*"; }
+err()   { echo -e "${RED}❌${RESET} $*"; }
+info()  { echo -e "${BLUE}ℹ️ ${RESET} $*"; }
+step()  { echo -e "\n${BOLD}==> $*${RESET}"; }
+
+# ===== utility ==============================================================
+vernum() {  # converte "v18.17.0" -> "18.17.0" e in numero confrontabile "18 17 0"
+  local v="${1#v}"; IFS='.' read -r a b c <<<"$v"; echo "$a ${b:-0} ${c:-0}"
+}
+ver_ge() {  # >=
+  local A B C D E F; read -r A B C <<<"$(vernum "$1")"; read -r D E F <<<"$(vernum "$2")"
+  (( A>D || (A==D && (B>E || (B==E && C>=F))) ))
+}
+
+# ===== prerequisiti =========================================================
+step "check prerequisiti"
+
+need_cmds=(node npm npx git)
+missing=()
+for c in "${need_cmds[@]}"; do command -v "$c" >/dev/null 2>&1 || missing+=("$c"); done
+if ((${#missing[@]})); then
+  err "Comandi mancanti: ${missing[*]}"
+  echo "Installa/aggiorna prima di continuare."
+  exit 1
+fi
+ok "Comandi base presenti: node, npm, npx, git"
+
+NODE_VER="$(node -v)"
+if ! ver_ge "$NODE_VER" "18.0.0"; then
+  err "Node $NODE_VER troppo vecchio. Richiesto >= 18.0.0"
+  exit 1
+fi
+ok "Node $NODE_VER"
+
+# Trova CLI per reload (Cursor o VS Code)
+CLI=""
+if command -v cursor >/dev/null 2>&1; then
+  CLI="cursor"
+elif command -v code >/dev/null 2>&1; then
+  CLI="code"
+fi
+if [[ -n "${CLI}" ]]; then
+  ok "CLI editor rilevata: ${CLI}"
+else
+  warn "CLI editor non rilevata (né 'cursor' né 'code'). Il reload sarà manuale."
+  info "Suggerimento: in Cursor → Command Palette digita 'Shell Command: Install 'cursor' command in PATH'."
+fi
+
+# ===== wizard ===============================================================
+step "wizard iniziale progetto"
 
 ask_yn () { read -r -p "$1 [s/N]: " a; [[ "$a" =~ ^([sSyY]|yes)$ ]]; }
 
-# === 1) MCP per-progetto ======================================================
-echo ""
 echo "Seleziona MCP per questo progetto:"
-echo "  1) filesystem (consigliato)  0) nessuno"
+echo "  1) filesystem (consigliato)   0) nessuno"
 read -r -p "Scelta [1/0] (default 1): " CHOICE
 CHOICE=${CHOICE:-1}
 
@@ -33,12 +90,11 @@ if [[ "$CHOICE" == "1" ]]; then
   }
 }
 JSON
-  echo "✅ MCP configurato: filesystem → ${ROOT}"
+  ok "Creato .cursor/mcp.json (filesystem → ${ROOT})"
 else
-  echo "ℹ️  Nessun MCP per-progetto creato (userai solo i globali)."
+  warn "Nessun MCP per-progetto creato (userai solo i globali)."
 fi
 
-# === 2) PRD ===================================================================
 if ask_yn "Vuoi creare il PRD (docs/PRD.md)?"; then
   mkdir -p docs
   if [[ ! -f docs/PRD.md ]]; then
@@ -71,13 +127,12 @@ GA4: `cta_click`, `form_submit`, `scroll_75`.
 ## 7. UAT
 Lighthouse mobile ≥ 90; nessun errore console/404.
 MD
-    echo "✅ PRD creato"
+    ok "Creato docs/PRD.md"
   else
-    echo "ℹ️  PRD esistente: skip"
+    info "PRD esistente: skip"
   fi
 fi
 
-# === 3) Tasks =================================================================
 if ask_yn "Vuoi creare i task (.cursor/tasks.json)?"; then
   mkdir -p .cursor
   if [[ ! -f .cursor/tasks.json ]]; then
@@ -106,13 +161,12 @@ if ask_yn "Vuoi creare i task (.cursor/tasks.json)?"; then
   ]
 }
 JSON
-    echo "✅ Tasks creati"
+    ok "Creato .cursor/tasks.json"
   else
-    echo "ℹ️  Tasks esistenti: skip"
+    info "Tasks esistenti: skip"
   fi
 fi
 
-# === 4) File base =============================================================
 if ask_yn "Vuoi creare file base (.editorconfig, .gitignore, README)?"; then
   if [[ ! -f .editorconfig ]]; then
     cat > .editorconfig <<'EC'
@@ -125,9 +179,9 @@ indent_size = 2
 insert_final_newline = true
 trim_trailing_whitespace = true
 EC
-    echo "✅ .editorconfig creato"
+    ok "Creato .editorconfig"
   else
-    echo "ℹ️  .editorconfig esistente: skip"
+    info ".editorconfig esistente: skip"
   fi
 
   if [[ ! -f .gitignore ]]; then
@@ -137,30 +191,44 @@ dist/
 .env
 .DS_Store
 GI
-    echo "✅ .gitignore creato"
+    ok "Creato .gitignore"
   else
-    echo "ℹ️  .gitignore esistente: skip"
+    info ".gitignore esistente: skip"
   fi
 
   if [[ ! -f README.md ]]; then
     cat > README.md <<'MD'
 # progetto (inizializzato dal wizard)
-
 - MCP globali (in Cursor): sequential-thinking, refactor-mcp
 - MCP per-progetto: filesystem in `.cursor/mcp.json` (se attivato)
 - Documentazione: `docs/PRD.md`
 - Pianificazione: `.cursor/tasks.json`
-
-## avvio rapido
-1) Terminale di Cursor → `npm run init` (puoi rilanciarlo quando vuoi)  
-2) Dopo il wizard → `Cmd+Shift+P` → **Reload Window**  
-3) In chat → `/mcp` per vedere i tool attivi
 MD
-    echo "✅ README creato"
+    ok "Creato README.md"
   else
-    echo "ℹ️  README esistente: skip"
+    info "README esistente: skip"
   fi
 fi
 
-echo ""
-echo "🎉 Fine wizard. In Cursor esegui: Cmd+Shift+P → Reload Window → /mcp"
+# ===== reload automatico =====================================================
+step "reload della finestra di Cursor"
+
+RELOAD_CMD="workbench.action.reloadWindow"
+if [[ -n "${CLI}" ]]; then
+  set +e
+  "${CLI}" --command "${RELOAD_CMD}" >/dev/null 2>&1
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    ok "Reload inviato a ${CLI}"
+  else
+    warn "Impossibile avviare reload via ${CLI}. Fallback manuale:"
+    echo -e "  - Premi ${BOLD}Cmd+Shift+P${RESET} → digita ${BOLD}Reload Window${RESET} → Invio."
+  fi
+else
+  warn "Reload automatico non disponibile."
+  echo -e "  - Premi ${BOLD}Cmd+Shift+P${RESET} → ${BOLD}Reload Window${RESET}."
+fi
+
+echo
+ok "Setup completato. In chat digita ${BOLD}/mcp${RESET} per verificare i tool attivi."
