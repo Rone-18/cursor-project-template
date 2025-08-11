@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# ------------------------------------------------------------
-# Wizard iniziale per progetto (Cursor)
-# - Check prerequisiti (node/npm/npx/git, versioni minime)
-# - Verifica rapida autenticazione GitHub (token/gh login) se presente un remote
-# - Configura MCP per-progetto (filesystem con path scelto)
-# - Crea PRD, tasks e file base (opzionali)
-# - Tenta il reload automatico della finestra di Cursor/VS Code
-# ------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Wizard iniziale per progetto (Cursor) con prompt chiari e default espliciti
+# - Mostra sempre il valore di default e cosa succede se premi INVIO
+# - Conferma ogni scelta con riepilogo
+# - Crea MCP per-progetto (filesystem), PRD, tasks e file base
+# - Tenta il reload automatico di Cursor/VS Code
+# -----------------------------------------------------------------------------
 set -euo pipefail
 
-# ===== stile output (colori) ===============================================
+# ===== stile output ==========================================================
 if [[ -t 1 ]]; then
   BOLD="\e[1m"; DIM="\e[2m"; RESET="\e[0m"
   GREEN="\e[32m"; YELLOW="\e[33m"; RED="\e[31m"; BLUE="\e[34m"
@@ -17,91 +16,80 @@ else
   BOLD=""; DIM=""; RESET=""; GREEN=""; YELLOW=""; RED=""; BLUE=""
 fi
 
-ok()    { echo -e "${GREEN}✅${RESET} $*"; }
-warn()  { echo -e "${YELLOW}⚠️ ${RESET} $*"; }
-err()   { echo -e "${RED}❌${RESET} $*"; }
-info()  { echo -e "${BLUE}ℹ️ ${RESET} $*"; }
-step()  { echo -e "\n${BOLD}==> $*${RESET}"; }
+ok()   { echo -e "${GREEN}✅${RESET} $*"; }
+warn() { echo -e "${YELLOW}⚠️ ${RESET} $*"; }
+err()  { echo -e "${RED}❌${RESET} $*"; }
+info() { echo -e "${BLUE}ℹ️ ${RESET} $*"; }
+step() { echo -e "\n${BOLD}==> $*${RESET}"; }
 
-# ===== utility ==============================================================
-vernum() {  # "v18.17.0" -> "18 17 0"
-  local v="${1#v}"; IFS='.' read -r a b c <<<"$v"; echo "$a ${b:-0} ${c:-0}"
+# ===== helpers ===============================================================
+vernum() { local v="${1#v}"; IFS='.' read -r a b c <<<"$v"; echo "$a ${b:-0} ${c:-0}"; }
+ver_ge() { local A B C D E F; read -r A B C <<<"$(vernum "$1")"; read -r D E F <<<"$(vernum "$2")"; (( A>D || (A==D && (B>E || (B==E && C>=F))) )); }
+
+ask_yes_no_default_no() {
+  # Prompt sì/no con default = NO. Invio => NO.
+  local q="$1"; local ans
+  read -r -p "$q [s/N]: " ans
+  [[ "${ans,,}" =~ ^(s|si|y|yes)$ ]] && return 0 || return 1
 }
-ver_ge() {  # >=
-  local A B C D E F; read -r A B C <<<"$(vernum "$1")"; read -r D E F <<<"$(vernum "$2")"
-  (( A>D || (A==D && (B>E || (B==E && C>=F))) ))
+
+ask_yes_no_default_yes() {
+  # Prompt sì/no con default = SÌ. Invio => SÌ.
+  local q="$1"; local ans
+  read -r -p "$q [S/n]: " ans
+  [[ -z "$ans" || "${ans,,}" =~ ^(s|si|y|yes)$ ]] && return 0 || return 1
 }
 
-ask_yn () { read -r -p "$1 [s/N]: " a; [[ "$a" =~ ^([sSyY]|yes)$ ]]; }
+ask_with_default() {
+  # Prompt con default esplicito. Invio => default.
+  local prompt="$1"; local def="$2"; local out
+  read -r -p "$prompt (default: ${def}) → " out
+  echo "${out:-$def}"
+}
 
-# ===== prerequisiti =========================================================
+confirm_choice() {
+  # Stampa conferma scelta in modo chiaro
+  echo -e "${DIM}Scelta:${RESET} $*"
+}
+
+# ===== prerequisiti ==========================================================
 step "check prerequisiti"
-
-need_cmds=(node npm npx git)
-missing=()
-for c in "${need_cmds[@]}"; do command -v "$c" >/dev/null 2>&1 || missing+=("$c"); done
-if ((${#missing[@]})); then
-  err "Comandi mancanti: ${missing[*]}"
-  echo "Installa/aggiorna prima di continuare."
-  exit 1
-fi
+for c in node npm npx git; do
+  command -v "$c" >/dev/null 2>&1 || { err "Comando mancante: $c"; exit 1; }
+done
 ok "Comandi base presenti: node, npm, npx, git"
 
 NODE_VER="$(node -v)"
-if ! ver_ge "$NODE_VER" "18.0.0"; then
-  err "Node $NODE_VER troppo vecchio. Richiesto >= 18.0.0"
-  exit 1
-fi
+ver_ge "$NODE_VER" "18.0.0" || { err "Node $NODE_VER troppo vecchio. Richiesto >= 18.0.0"; exit 1; }
 ok "Node $NODE_VER"
 
-# ===== verifica auth GitHub (opzionale, non blocca) ========================
-step "verifica autenticazione GitHub (opzionale)"
-origin="$(git config --get remote.origin.url || true)"
-if [[ -n "${origin}" && "${origin}" == https*github.com* ]]; then
-  # Evita prompt interattivi: se non sei autenticato segnaliamo solo un warning
-  if GIT_TERMINAL_PROMPT=0 git ls-remote -h origin HEAD >/dev/null 2>&1; then
-    ok "Accesso a GitHub OK per ${origin}"
+# ===== (opzionale) verifica accesso GitHub remoto ===========================
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git remote get-url origin >/dev/null 2>&1; then
+  if git ls-remote --heads "$(git remote get-url origin)" >/dev/null 2>&1; then
+    ok "Accesso a GitHub OK per $(git remote get-url origin)"
   else
-    warn "GitHub non autenticato per ${origin} (repo privato o token mancante/scaduto)."
-    if command -v gh >/dev/null 2>&1; then
-      info "Suggerito: esegui ${BOLD}gh auth login${RESET} per configurare l'accesso."
-    else
-      info "In alternativa usa un Personal Access Token (Classic) con scope ${BOLD}repo${RESET}."
-      info "Guida: https://github.com/settings/tokens  (poi usa il token come password nei comandi git)."
-    fi
-    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-      warn "Rilevata variabile GITHUB_TOKEN, ma l'accesso fallisce: probabilmente il token è scaduto o non ha scope 'repo'."
-    fi
+    warn "Impossibile verificare l’accesso a GitHub (repo privato o token mancante?). Continua comunque."
   fi
-else
-  info "Nessun remote GitHub HTTPS rilevato oppure progetto non ancora collegato."
 fi
 
-# Trova CLI per reload (Cursor o VS Code)
+# trova CLI editor per reload
 CLI=""
-if command -v cursor >/dev/null 2>&1; then
-  CLI="cursor"
-elif command -v code >/dev/null 2>&1; then
-  CLI="code"
-fi
-if [[ -n "${CLI}" ]]; then
-  ok "CLI editor rilevata: ${CLI}"
-else
-  warn "CLI editor non rilevata (né 'cursor' né 'code'). Il reload sarà manuale."
-  info "Suggerimento: in Cursor → Command Palette digita 'Shell Command: Install \"cursor\" command in PATH'."
-fi
+command -v cursor >/dev/null 2>&1 && CLI="cursor"
+command -v code   >/dev/null 2>&1 && CLI="${CLI:-code}"
+[[ -n "$CLI" ]] && ok "CLI editor rilevata: ${CLI}" || warn "CLI editor non rilevata. Il reload sarà manuale."
 
-# ===== wizard ===============================================================
+# ===== wizard ================================================================
 step "wizard iniziale progetto"
 
+# 1) MCP per-progetto
 echo "Seleziona MCP per questo progetto:"
 echo "  1) filesystem (consigliato)   0) nessuno"
-read -r -p "Scelta [1/0] (default 1): " CHOICE
-CHOICE=${CHOICE:-1}
+CHOICE="$(ask_with_default 'Scelta' '1')"
+confirm_choice "MCP selezionato: ${CHOICE}"
 
 if [[ "$CHOICE" == "1" ]]; then
-  read -r -p "Percorso root da esporre (default: .): " ROOT
-  ROOT=${ROOT:-.}
+  ROOT="$(ask_with_default 'Percorso root da esporre al tool filesystem (Invio = cartella corrente)' '.')"
+  confirm_choice "Filesystem root → ${ROOT}"
   mkdir -p .cursor
   cat > .cursor/mcp.json <<JSON
 {
@@ -116,10 +104,11 @@ if [[ "$CHOICE" == "1" ]]; then
 JSON
   ok "Creato .cursor/mcp.json (filesystem → ${ROOT})"
 else
-  warn "Nessun MCP per-progetto creato (userai solo i globali)."
+  warn "Nessun MCP per-progetto creato (userai solo gli MCP globali)."
 fi
 
-if ask_yn "Vuoi creare il PRD (docs/PRD.md)?"; then
+# 2) PRD
+if ask_yes_no_default_yes "Vuoi creare il PRD (docs/PRD.md)? Se premi INVIO verrà creato ora"; then
   mkdir -p docs
   if [[ ! -f docs/PRD.md ]]; then
     cat > docs/PRD.md <<'MD'
@@ -155,9 +144,12 @@ MD
   else
     info "PRD esistente: skip"
   fi
+else
+  confirm_choice "PRD: non creato (scelta utente)"
 fi
 
-if ask_yn "Vuoi creare i task (.cursor/tasks.json)?"; then
+# 3) tasks
+if ask_yes_no_default_yes "Vuoi creare i task (.cursor/tasks.json)? Se premi INVIO verranno creati ora"; then
   mkdir -p .cursor
   if [[ ! -f .cursor/tasks.json ]]; then
     cat > .cursor/tasks.json <<'JSON'
@@ -189,9 +181,12 @@ JSON
   else
     info "Tasks esistenti: skip"
   fi
+else
+  confirm_choice "Tasks: non creati (scelta utente)"
 fi
 
-if ask_yn "Vuoi creare file base (.editorconfig, .gitignore, README)?"; then
+# 4) file base
+if ask_yes_no_default_yes "Vuoi creare i file base (.editorconfig, .gitignore, README)? Se premi INVIO verranno creati ora"; then
   if [[ ! -f .editorconfig ]]; then
     cat > .editorconfig <<'EC'
 root = true
@@ -232,11 +227,19 @@ MD
   else
     info "README esistente: skip"
   fi
+else
+  confirm_choice "File base: non creati (scelta utente)"
 fi
 
-# ===== reload automatico =====================================================
-step "reload della finestra di Cursor"
+# ===== riepilogo =============================================================
+step "riepilogo"
+echo -e "${DIM}- MCP per-progetto:${RESET} $([[ -f .cursor/mcp.json ]] && echo 'filesystem' || echo 'nessuno')"
+echo -e "${DIM}- PRD:${RESET} $([[ -f docs/PRD.md ]] && echo 'creato' || echo 'non creato')"
+echo -e "${DIM}- Tasks:${RESET} $([[ -f .cursor/tasks.json ]] && echo 'creati' || echo 'non creati')"
+echo -e "${DIM}- File base:${RESET} $([[ -f .editorconfig || -f .gitignore || -f README.md ]] && echo 'creati/aggiornati' || echo 'non creati')"
 
+# ===== reload ================================================================
+step "reload della finestra di Cursor"
 RELOAD_CMD="workbench.action.reloadWindow"
 if [[ -n "${CLI}" ]]; then
   set +e
